@@ -1,0 +1,181 @@
+#!/bin/sh
+
+### BEGIN INIT INFO
+# Provides:      myexp
+# Required-Start:    $local_fs $remote_fs $network $syslog $named
+# Required-Stop:     $local_fs $remote_fs $network $syslog $named
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: starts the myexp web server
+# Description:       starts convert using start-stop-daemon
+### END INIT INFO
+
+##### Change these to match your app #####
+APP_ADAPTER="mysql"
+APP_PATH="/home/te-koyama/Projects/dbexpsh"
+APP_ROOT="${APP_PATH}/${APP_ADAPTER}"
+PATH="${APP_ROOT}/bin:${PATH}"
+NAME="myexp"
+TABLE="${APP_ROOT}/tablelist"
+CENTRE="${APP_ROOT}/tablecent"
+PROLOG="${APP_ROOT}/log/process.log"
+ERRLOG="${APP_ROOT}/log/error.log"
+TEMP="${APP_ROOT}/export"
+EXP="${APP_ROOT}/export"
+
+
+# ==================================================
+# Database Settings.
+# ==================================================
+if [ -r ${APP_ROOT}/conf/myexp.conf ]; then
+    . ${APP_ROOT}/conf/myexp.conf
+fi
+
+
+if [ ! -f ${TABLE} ]; then
+    exit 1
+fi
+
+# ==================================================
+# Ucas Settings.
+# ==================================================
+if [ ! -f ${CENTRE} ]; then
+    exit 1
+fi
+
+# ==================================================
+# Table definition output {desc} file.
+# ==================================================
+expdesc() {
+    for i in `cat ${TABLE}`
+    do
+        mysql --host=${HOST} --port=${PORT} --user=${USER} --password=${PASS} ${DB} -e "select * from ${i}" > ${TEMP}/${i}.desc
+    done
+    return 0
+}
+
+# ==================================================
+# Table definition output {desc} file.
+# ==================================================
+expucas() {
+    echo "ucas files in an ${APP_ADAPTER} SQL execution."
+    mysql --host=${HOST} --port=${PORT} --user=${USER} --password=${PASS} ${DB} -e "
+    SELECT
+        ucasdb.user_expirations.gc_id,
+        ucasdb.users.name,
+        ucasdb.users.phone,
+        ucasdb.user_expirations.type AS 'etc',
+        (CASE WHEN ucasdb.user_expirations.status = 0 THEN '成功' ELSE '決済実行失敗' END) AS 'status',
+        ucasdb.user_expirations.err_code,
+        ucasdb.user_expirations.err_info,
+        ucasdb.errors.err_message,
+        (CASE WHEN centre.m_emp.emp_name IS NULL THEN ucasdb.agencies.name ELSE centre.m_emp.emp_name END) AS 'support_name',
+        ucasdb.user_expirations.expiration_at AS expir_start,
+        ucasdb.user_expirations.expiration_at AS expir_end,
+        ucasdb.user_expirations.ord_id
+    FROM
+        ucasdb.user_expirations
+        LEFT JOIN ucasdb.users ON ucasdb.users.id = ucasdb.user_expirations.user_id
+        LEFT JOIN ucasdb.errors ON ucasdb.errors.err_info = ucasdb.user_expirations.err_info
+        LEFT JOIN ucasdb.agencies ON ucasdb.agencies.login = ucasdb.users.support_cd
+        LEFT JOIN centre.m_emp ON centre.m_emp.emp_cd = ucasdb.users.support_cd;
+    " > ${TEMP}/ucas.desc
+
+    cat ${TEMP}/ucas.desc | sed -e 's/^/"/g' | sed -e 's/$/"/g' | sed -e 's/\t/","/g' | sed -e 's/$/\r/g' > ${TEMP}/ucas.tmp
+    rm -rf ${TEMP}/ucas.desc
+
+    iconv -f UTF8 -t SJIS ${TEMP}/ucas.tmp > ${TEMP}/ucas.csv
+    rm -rf ${TEMP}/ucas.tmp
+    echo "Completed the ${APP_ADAPTER} SQL."
+
+    return 0
+}
+
+# ==================================================
+# CSV output based on {desc} file.
+# ==================================================
+expcsv() {
+    for i in `cat ${TABLE}`
+    do
+        if [ ! -f ${TEMP}/${i}.desc ]; then
+            echo "${TEMP}/${i}.desc File Not Found."
+            exit 1
+        fi
+        cat ${TEMP}/${i}.desc | sed -e 's/^/"/g' | sed -e 's/$/"/g' | sed -e 's/\t/","/g' > ${EXP}/${i}.csv
+
+        rm -rf ${TEMP}/${i}.desc
+    done
+
+    return 0
+}
+
+# ==================================================
+# TSV output based on {desc} file.
+# ==================================================
+exptsv() {
+    for i in `cat ${TABLE}`
+    do
+        if [ ! -f ${TEMP}/${i}.desc ]; then
+            echo "${TEMP}/${i}.desc File Not Found."
+            exit 1
+        fi
+        cat ${TEMP}/${i}.desc | sed -e 's/^/"/g' | sed -e 's/$/"/g' | sed -e 's/\t/","/g' | sed -e 's/,/\t/g' > ${EXP}/${i}.tsv
+
+        rm -rf ${TEMP}/${i}.desc
+    done
+
+    return 0
+}
+
+# ==================================================
+# Export files All Clear
+# ==================================================
+expclear() {
+    for i in `cat ${TABLE}`
+    do
+        if [ -f ${TEMP}/${i}.desc ]; then
+            rm -rf ${TEMP}/${i}.desc
+            echo "Deleted the ${i}.desc file success."
+            echo "[INFO] date ${TEMP}/${i}.desc file removed success." > $PROLOG 2> $ERRLOG
+        fi
+        if [ -f ${EXP}/${i}.csv ]; then
+            rm -rf ${EXP}/${i}.csv
+            echo "Deleted the ${i}.csv file success."
+            echo "[INFO] date ${EXP}/${i}.csv file removed success." > $PROLOG 2> $ERRLOG
+        fi
+        if [ -f ${TEMP}/${i}.tsv ]; then
+            rm -rf ${TEMP}/${i}.tsv
+            echo "Deleted the ${i}.tsv file success."
+            echo "date ${TEMP}/${i}.tsv file removed success." > $PROLOG 2> $ERRLOG
+        fi
+    done
+    if [ -f ${EXP}/ucas.csv ]; then
+        rm -rf ${EXP}/ucas.csv
+        echo "Deleted the ucas.csv file success."
+        echo "[INFO] date ${EXP}/ucas.csv file removed success." > $PROLOG 2> $ERRLOG
+    fi
+
+    return 0
+}
+
+
+case "$1" in
+    clear)
+        expclear
+        ;;
+    csv)
+        expdesc
+        expcsv
+        ;;
+    tsv)
+        expdesc
+        exptsv
+        ;;
+    ucas)
+        expucas
+        ;;
+    *)
+        echo >&2 "Usage: $0 <clear|ucas|csv|tsv>"
+        exit 1
+        ;;
+esac

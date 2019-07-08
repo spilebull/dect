@@ -1,0 +1,254 @@
+#!/bin/sh
+
+### BEGIN INIT INFO
+# Provides:      oraexp
+# Required-Start:    $local_fs $remote_fs $network $syslog $named
+# Required-Stop:     $local_fs $remote_fs $network $syslog $named
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: starts the oraexp web server
+# Description:       starts convert using start-stop-daemon
+### END INIT INFO
+
+##### Change these to match your app #####
+APP_ADAPTER="oracle"
+APP_PATH="/home/te-koyama/Projects/dbexpsh"
+APP_ROOT="${APP_PATH}/${APP_ADAPTER}"
+PATH="${APP_ROOT}/bin:${PATH}"
+NAME="oraexp"
+TABLE="${APP_ROOT}/tablelist"
+PROLOG="${APP_ROOT}/log/process.log"
+ERRLOG="${APP_ROOT}/log/error.log"
+TEMP="${APP_ROOT}/export"
+EXP="${APP_ROOT}/export"
+
+
+# ==================================================
+# Database Settings.
+# ==================================================
+if [ -r ${APP_ROOT}/conf/oraexp.conf ]; then
+    . ${APP_ROOT}/conf/oraexp.conf
+fi
+
+if [ ! -f ${TABLE} ]; then
+    exit 1
+fi
+
+# ==================================================
+# Table definition output {desc} file.
+# ==================================================
+expdesc() {
+    for i in `cat ${TABLE}`
+    do
+        if [ -f ${TEMP}/${i}.desc ]; then
+            rm -rf ${TEMP}/${i}.desc
+        fi
+
+        sqlplus64 -s ${USER}/${PASS}@${HOST}:${PORT}/${SID} >/dev/null <<EOF
+        set echo off
+        set heading off
+        set linesize 100
+        set pagesize 0
+        set trimspool on
+        set feedback off
+        set colsep '","'
+        spool ${TEMP}/${i}.desc
+        desc ${i}
+        spool off
+        exit;
+EOF
+    done
+    return 0
+}
+
+# ==================================================
+# Desc output based on {sql} file.
+# ==================================================
+expsql() {
+    for i in `cat ${TABLE}`
+    do
+        if [ -f ${TEMP}/${i}.sql ]; then
+            rm -rf ${TEMP}/${i}.sql
+        fi
+        if [ -f ${TEMP}/${i}.clm ]; then
+            rm -rf ${TEMP}/${i}.clm
+        fi
+
+        if [ ! -f ${TEMP}/${i}.desc ]; then
+            echo "${TEMP}/${i}.desc File Not Found."
+            exit 1
+        fi
+        M=`wc -l ${TEMP}/${i}.desc | awk '{print $1}'`
+        N=`expr $M - 2`
+
+        export WORD=`tail -${N} ${TEMP}/${i}.desc | awk '{print $1}' | egrep -v ^$ | tr '\n' ',' | sed -e s/,$/'\n'/ -e s/,/"||'\",\"'||"/g`
+        echo ${WORD} | sed -e s/\|\|//g | sed -e s/\'//g > ${TEMP}/${i}.clm
+
+        echo "set echo off" > ${TEMP}/${i}.sql
+        echo "set heading off" >> ${TEMP}/${i}.sql
+        echo "set underline off" >> ${TEMP}/${i}.sql
+        echo "set linesize 10000" >> ${TEMP}/${i}.sql
+        echo "set pagesize 0" >> ${TEMP}/${i}.sql
+        echo "set trimspool on" >> ${TEMP}/${i}.sql
+        echo "set feedback off" >> ${TEMP}/${i}.sql
+        echo "spool ${TEMP}/${i}.tmp" >> ${TEMP}/${i}.sql
+        echo "select ${WORD} from ${i}" >> ${TEMP}/${i}.sql
+        echo ";" >> ${TEMP}/${i}.sql
+        echo "spool off" >> ${TEMP}/${i}.sql
+        echo "exit" >> ${TEMP}/${i}.sql
+
+        rm -rf ${TEMP}/${i}.desc
+    done
+
+    return 0
+}
+
+# ==================================================
+# CSV output based on {sql} file.
+# ==================================================
+expcsv() {
+    for i in `cat ${TABLE}`
+    do
+        if [ -f ${EXP}/${i}.csv ]; then
+            rm -rf ${EXP}/${i}.csv
+        fi
+        if [ ! -f ${TEMP}/${i}.sql ]; then
+            echo "${TEMP}/${i}.sql File Not Found."
+            exit 1
+        fi
+
+        echo "${i}.sql files in an ${APP_ADAPTER} SQL execution."
+        sqlplus64 -s ${USER}/${PASS}@${HOST}:${PORT}/${SID} @${TEMP}/${i}.sql  >/dev/null
+        sleep 1
+        echo "Completed the ${APP_ADAPTER} SQL."
+
+        rm -rf ${TEMP}/${i}.sql
+    done
+
+    for i in `cat ${TABLE}`
+    do
+        if [ ! -f ${TEMP}/${i}.tmp ]; then
+            echo "${TEMP}/${i}.tmp File Not Found."
+            exit 1
+        fi
+
+        if [ ! -f ${TEMP}/${i}.clm ]; then
+            echo "${TEMP}/${i}.clm File Not Found."
+            exit 1
+        fi
+        sed -e s/^/\"/ -e s/$/\"/ ${TEMP}/${i}.clm > ${EXP}/${i}.csv
+        rm -rf ${TEMP}/${i}.clm
+
+        # Date Type: `date +%Y%m%d%H%M%S`_${i}.csv
+        sed -e s/^/\"/ -e s/$/\"/ ${TEMP}/${i}.tmp >> ${EXP}/${i}.csv
+        rm -rf ${TEMP}/${i}.tmp
+    done
+
+    return 0
+}
+
+# ==================================================
+# TSV output based on {sql} file.
+# ==================================================
+exptsv() {
+    for i in `cat ${TABLE}`
+    do
+        if [ -f ${EXP}/${i}.tsv ]; then
+            rm -rf ${EXP}/${i}.tsv
+        fi
+        if [ ! -f ${TEMP}/${i}.sql ]; then
+            echo "${TEMP}/${i}.sql File Not Found."
+            exit 1
+        fi
+
+        echo "${i}.sql files in an ${APP_ADAPTER} SQL execution."
+        sqlplus64 -s ${USER}/${PASS}@${HOST}:${PORT}/${SID} @${TEMP}/${i}.sql  >/dev/null
+        sleep 1
+        echo "Completed the ${APP_ADAPTER} SQL."
+
+        rm -rf ${TEMP}/${i}.sql
+    done
+
+    for i in `cat ${TABLE}`
+    do
+        if [ ! -f ${TEMP}/${i}.tmp ]; then
+            echo "${TEMP}/${i}.tmp File Not Found."
+            exit 1
+        fi
+
+        if [ ! -f ${TEMP}/${i}.clm ]; then
+            echo "${TEMP}/${i}.clm File Not Found."
+            exit 1
+        fi
+        cat ${TEMP}/${i}.clm | sed -e 's/^/\"/g' | sed -e 's/$/\"/g' | sed -e 's/,/\t/g' > ${EXP}/${i}.tsv
+        rm -rf ${TEMP}/${i}.clm
+
+        # Date Type: `date +%Y%m%d%H%M%S`_${i}.csv
+        cat ${TEMP}/${i}.tmp | sed -e 's/^/\"/g' | sed -e 's/$/\"/g' | sed -e 's/,/\t/g' > ${EXP}/${i}.tsv
+        rm -rf ${TEMP}/${i}.tmp
+    done
+
+    return 0
+}
+
+# ==================================================
+# Export files All Clear
+# ==================================================
+expclear() {
+    for i in `cat ${TABLE}`
+    do
+        if [ -f ${TEMP}/${i}.desc ]; then
+            rm -rf ${TEMP}/${i}.desc
+            echo "Deleted the ${i}.desc file success."
+            echo "[ERROR] date ${TEMP}/${i}.desc file removed success." > $PROLOG 2> $ERRLOG
+        fi
+        if [ -f ${TEMP}/${i}.sql ]; then
+            rm -rf ${TEMP}/${i}.sql
+            echo "Deleted the ${i}.sql file success."
+            echo "[ERROR] date ${TEMP}/${i}.sql file removed success." > $PROLOG 2> $ERRLOG
+        fi
+        if [ -f ${TEMP}/${i}.tmp ]; then
+            rm -rf ${TEMP}/${i}.tmp
+            echo "Deleted the ${i}.tmp file success."
+            echo "[ERROR] date ${TEMP}/${i}.tmp file removed success." > $PROLOG 2> $ERRLOG
+        fi
+        if [ -f ${TEMP}/${i}.clm ]; then
+            rm -rf ${TEMP}/${i}.clm
+            echo "Deleted the ${i}.clm file success."
+            echo "[ERROR] date ${TEMP}/${i}.clm file removed success." > $PROLOG 2> $ERRLOG
+        fi
+        if [ -f ${EXP}/${i}.csv ]; then
+            rm -rf ${EXP}/${i}.csv
+            echo "Deleted the ${i}.csv file success."
+            echo "[ERROR] date ${EXP}/${i}.csv file removed success." > $PROLOG 2> $ERRLOG
+        fi
+        if [ -f ${EXP}/${i}.tsv ]; then
+            rm -rf ${EXP}/${i}.tsv
+            echo "Deleted the ${i}.tsv file success."
+            echo "[ERROR] date ${EXP}/${i}.tsv file removed success." > $PROLOG 2> $ERRLOG
+        fi
+    done
+
+    return 0
+}
+
+
+case "$1" in
+    clear)
+        expclear
+        ;;
+    csv)
+        expdesc
+        expsql
+        expcsv
+        ;;
+    tsv)
+        expdesc
+        expsql
+        exptsv
+        ;;
+    *)
+        echo >&2 "Usage: ${NAME} <clear|csv|tsv>"
+        exit 1
+        ;;
+esac
